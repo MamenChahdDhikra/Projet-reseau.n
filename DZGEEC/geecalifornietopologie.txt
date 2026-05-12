@@ -1,0 +1,73 @@
+var ZONE_NAME  = 'CA_Zone1';
+var ASSET_NAME = 'CA_Zone1_T01_DOY010';
+
+var DRIVE_FOLDER = 'Sentinel2_California_MCTNet';
+
+var pixels = ee.FeatureCollection(
+  'projects/teak-span-491210-v5/assets/' + ASSET_NAME
+);
+
+print('Pixels chargés :', pixels.size());
+
+var elevation = ee.Image('USGS/SRTMGL1_003')
+  .select('elevation')
+  .rename('elevation');
+
+var landforms = ee.Image('CSP/ERGo/1_0/Global/ALOS_landforms')
+  .select('constant')
+  .rename('landforms');
+
+var topo = elevation.addBands(landforms);
+
+print('Topographie chargée ✅');
+
+var pixels_with_topo = topo.sampleRegions({
+  collection : pixels,
+  properties : ['pixel_id', 'class_name', 'label', 'zone', 'split'],
+  scale      : 30,
+  tileScale  : 4,
+  geometries : true
+});
+
+print('Résultat :', pixels_with_topo.size());
+print('Exemple  :', pixels_with_topo.first());
+
+var fn = ZONE_NAME + '_TOPO2';
+
+Export.table.toDrive({
+  collection    : pixels_with_topo,
+  description   : fn,
+  folder        : DRIVE_FOLDER,
+  fileNamePrefix: fn,
+  fileFormat    : 'CSV',
+  selectors     : [
+    'pixel_id', 'label', 'class_name',
+    'zone', 'split',
+    'elevation', 'landforms',
+    '.geo'
+  ]
+});
+
+print('✅ Tâche créée !');
+print('Fichier : ' + fn + '.csv');
+
+var ZONE_COORDS = {
+  'CA_Zone1': ee.Geometry.Rectangle([-122.0, 38.5, -121.0, 39.8]),
+  'CA_Zone2': ee.Geometry.Rectangle([-121.5, 35.8, -119.0, 38.4])
+};
+
+Map.centerObject(ZONE_COORDS[ZONE_NAME], 9);
+
+Map.addLayer(elevation,
+  {min: 0, max: 3000,
+   palette: ['green','yellow','brown','white']},
+  'Élévation (m)', true);
+
+Map.addLayer(landforms,
+  {min: 11, max: 42,
+   palette: ['#1A5BAB','#358221','#B5C98E',
+             '#E7D4A0','#F6E3B5','#F6E3B5',
+             '#E8D09B','#D6BD8D','#CBB882','#9B7653']},
+  'Landforms', false);
+
+Map.addLayer(pixels, {color: 'FF0000'}, 'Vos pixels', true);

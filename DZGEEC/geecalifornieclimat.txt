@@ -1,0 +1,156 @@
+var ZONE_NAME  = 'CA_Zone1';
+var ASSET_NAME = 'CA_Zone1_T01_DOY010';
+
+var DRIVE_FOLDER = 'DZC';
+var YEAR = 2021;
+
+var pixels = ee.FeatureCollection(
+  'projects/teak-span-491210-v5/assets/' + ASSET_NAME
+);
+print('Pixels chargés :', pixels.size());
+
+var era5_year = ee.ImageCollection('ECMWF/ERA5_LAND/HOURLY')
+  .filterBounds(pixels.geometry().bounds())
+  .filter(ee.Filter.calendarRange(YEAR, YEAR, 'year'))
+  .select([
+    'temperature_2m',
+    'total_precipitation',
+    'dewpoint_temperature_2m'
+  ]);
+
+var temp_min = era5_year.select('temperature_2m').min();
+var temp_max = era5_year.select('temperature_2m').max();
+var prec_min = era5_year.select('total_precipitation').min();
+var prec_max = era5_year.select('total_precipitation').max();
+var dew_min  = era5_year.select('dewpoint_temperature_2m').min();
+var dew_max  = era5_year.select('dewpoint_temperature_2m').max();
+
+print('Min/Max calculés ✅');
+
+function makeClimateComposite(t) {
+  var doyStart  = (t - 1) * 10 + 1;
+  var startDate = ee.Date.fromYMD(YEAR, 1, 1)
+                         .advance(doyStart - 1, 'day');
+  var endDate   = startDate.advance(10, 'day');
+
+  var era5_t = ee.ImageCollection('ECMWF/ERA5_LAND/HOURLY')
+    .filterBounds(pixels.geometry().bounds())
+    .filterDate(startDate, endDate)
+    .select([
+      'temperature_2m',
+      'total_precipitation',
+      'dewpoint_temperature_2m'
+    ]);
+
+  var composite = era5_t.mean();
+
+  var temp_c = composite.select('temperature_2m')
+    .subtract(273.15)
+    .rename('temperature_2m_C');
+
+  var dew_c = composite.select('dewpoint_temperature_2m')
+    .subtract(273.15)
+    .rename('dewpoint_temperature_2m_C');
+
+  var prec = composite.select('total_precipitation')
+    .rename('total_precipitation');
+
+  var temp_min_c = temp_min.subtract(273.15);
+  var temp_max_c = temp_max.subtract(273.15);
+  var dew_min_c  = dew_min.subtract(273.15);
+  var dew_max_c  = dew_max.subtract(273.15);
+
+  var temp_norm = temp_c.subtract(temp_min_c)
+    .divide(temp_max_c.subtract(temp_min_c))
+    .rename('temp_norm');
+
+  var prec_norm = prec.subtract(prec_min)
+    .divide(prec_max.subtract(prec_min))
+    .rename('prec_norm');
+
+  var dew_norm = dew_c.subtract(dew_min_c)
+    .divide(dew_max_c.subtract(dew_min_c))
+    .rename('dew_norm');
+
+  return temp_c
+    .addBands(dew_c)
+    .addBands(prec)
+    .addBands(temp_norm)
+    .addBands(prec_norm)
+    .addBands(dew_norm);
+}
+
+function p2(n) { return n < 10 ? '0' + n : '' + n; }
+
+function p3(n) {
+  return n < 10 ? '00' + n : (n < 100 ? '0' + n : '' + n);
+}
+
+for (var t = 1; t <= 36; t++) {
+  var doy       = t * 10;
+  var composite = makeClimateComposite(t);
+  var tC = t; 
+  var dC = doy;
+
+  var extracted = composite.sampleRegions({
+    collection : pixels,
+    properties : ['pixel_id', 'class_name', 'label', 'zone', 'split'],
+    scale      : 11132,
+    tileScale  : 4,
+    geometries : true
+  }).map(function(f) {
+    return f.set({'time_step': tC, 'DOY': dC, 'year': YEAR});
+  });
+
+  var fn = ZONE_NAME + '_CLIM_T' + p2(t) + '_DOY' + p3(doy);
+
+  Export.table.toDrive({
+    collection    : extracted,
+    description   : fn,
+    folder        : DRIVE_FOLDER,
+    fileNamePrefix: fn,
+    fileFormat    : 'CSV',
+    selectors     : [
+      'pixel_id',
+      'class_name',
+      'zone',
+      'split',
+      'time_step',
+      'DOY',
+      'year',
+      'temperature_2m_C',
+      'dewpoint_temperature_2m_C',
+      'total_precipitation',
+      'temp_norm',
+      'prec_norm',
+      'dew_norm',
+      '.geo'
+    ]
+  });
+}
+
+print('36 tâches créées → Tasks → Run All');
+print('Dossier : ' + DRIVE_FOLDER);
+
+var ZONE_COORDS = {
+  'CA_Zone1': ee.Geometry.Rectangle([-122.0, 38.5, -121.0, 39.8]),
+  'CA_Zone2': ee.Geometry.Rectangle([-121.5, 35.8, -119.0, 38.4])
+};
+
+Map.centerObject(ZONE_COORDS[ZONE_NAME], 9);
+
+var preview = makeClimateComposite(19);
+
+Map.addLayer(preview.select('temperature_2m_C'),
+  {min: 10, max: 40, palette: ['blue','yellow','red']},
+  'Température °C (période 19)', true);
+
+Map.addLayer(preview.select('total_precipitation'),
+  {min: 0, max: 0.01, palette: ['white','cyan','blue']},
+  'Précipitations (période 19)', false);
+
+Map.addLayer(preview.select('dew_norm'),
+  {min: 0, max: 1, palette: ['white','green','darkgreen']},
+  'Dewpoint normalisé (période 19)', false);
+
+Map.addLayer(pixels, {color: 'FF0000'}, 'Vos pixels', true);

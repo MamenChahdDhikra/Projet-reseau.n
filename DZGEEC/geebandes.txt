@@ -1,0 +1,218 @@
+var ZONE_NAME = 'CA_Zone1';
+
+var ZONE_COORDS = {
+  'CA_Zone1': ee.Geometry.Rectangle([-122.0, 39.0, -121.5, 39.5]),
+  'CA_Zone2': ee.Geometry.Rectangle([-120.5, 36.4, -120.0, 36.9])
+};
+
+var REGION = ZONE_COORDS[ZONE_NAME];
+
+var YEAR         = 2021;
+var CONFIDENCE   = 95;
+var DRIVE_FOLDER = 'DZ';
+
+var S2_BANDS = ['B2','B3','B4','B5','B6','B7','B8','B8A','B11','B12'];
+
+var S2_NAMES = [
+  'B2_Blue','B3_Green','B4_Red','B5_RedEdge1',
+  'B6_RedEdge2','B7_RedEdge3','B8_NIR',
+  'B8A_RedEdge4','B11_SWIR1','B12_SWIR2'
+];
+
+var CODES = {
+  Grapes:69,
+  Rice:3,
+  Alfalfa:36,
+  Almonds:75,
+  Pistachios:204
+};
+
+var NSAMP;
+
+if (ZONE_NAME === 'CA_Zone1') {
+  NSAMP = {
+    Rice:2037,
+    Alfalfa:974,
+    Almonds:200,
+    Grapes:30,
+    Pistachios:7,
+    Others:252
+  };
+} else {
+  NSAMP = {
+    Grapes:2024,
+    Almonds:583,
+    Pistachios:633,
+    Others:3260
+  };
+}
+
+var LBL = {
+  Grapes:1,
+  Rice:2,
+  Alfalfa:3,
+  Almonds:4,
+  Pistachios:5,
+  Others:6
+};
+
+var total;
+
+if (ZONE_NAME === 'CA_Zone1') {
+  total =
+    NSAMP.Rice +
+    NSAMP.Alfalfa +
+    NSAMP.Almonds +
+    NSAMP.Grapes +
+    NSAMP.Pistachios +
+    NSAMP.Others;
+} else {
+  total =
+    NSAMP.Grapes +
+    NSAMP.Almonds +
+    NSAMP.Pistachios +
+    NSAMP.Others;
+}
+
+print('Zone:', ZONE_NAME, '| Total:', total);
+
+var cdl = ee.ImageCollection('USDA/NASS/CDL')
+  .filter(ee.Filter.calendarRange(YEAR, YEAR, 'year'))
+  .first();
+
+var cropType  = cdl.select('cropland');
+var confLayer = cdl.select('confidence');
+
+var wc = ee.ImageCollection('ESA/WorldCover/v200')
+  .first()
+  .select('Map');
+
+var cropMask = wc.eq(40);
+
+var cdlFiltered = cropType
+  .updateMask(cropMask)
+  .updateMask(confLayer.gte(CONFIDENCE))
+  .clip(REGION);
+
+print('Pixels disponibles:');
+
+var checkPx = function(code, name, needed) {
+  var cnt = cdlFiltered.eq(code).reduceRegion({
+    reducer: ee.Reducer.sum(),
+    geometry: REGION,
+    scale: 30,
+    maxPixels: 1e9
+  }).get('cropland');
+
+  print('  ' + name + ' besoin=' + needed + ' dispo=', cnt);
+};
+
+if (ZONE_NAME === 'CA_Zone1') {
+  checkPx(CODES.Rice,       'Rice',       NSAMP.Rice);
+  checkPx(CODES.Alfalfa,    'Alfalfa',    NSAMP.Alfalfa);
+  checkPx(CODES.Almonds,    'Almonds',    NSAMP.Almonds);
+  checkPx(CODES.Grapes,     'Grapes',     NSAMP.Grapes);
+  checkPx(CODES.Pistachios, 'Pistachios', NSAMP.Pistachios);
+} else {
+  checkPx(CODES.Grapes,     'Grapes',     NSAMP.Grapes);
+  checkPx(CODES.Almonds,    'Almonds',    NSAMP.Almonds);
+  checkPx(CODES.Pistachios, 'Pistachios', NSAMP.Pistachios);
+}
+
+var othersMask = cdlFiltered.gt(0)
+  .and(cdlFiltered.neq(CODES.Grapes))
+  .and(cdlFiltered.neq(CODES.Rice))
+  .and(cdlFiltered.neq(CODES.Alfalfa))
+  .and(cdlFiltered.neq(CODES.Almonds))
+  .and(cdlFiltered.neq(CODES.Pistachios));
+
+var cdlForSampling;
+var classValues, classPoints, maxPoints;
+
+if (ZONE_NAME === 'CA_Zone1') {
+
+  cdlForSampling = ee.Image(0)
+    .where(cdlFiltered.eq(CODES.Grapes),     LBL.Grapes)
+    .where(cdlFiltered.eq(CODES.Rice),       LBL.Rice)
+    .where(cdlFiltered.eq(CODES.Alfalfa),    LBL.Alfalfa)
+    .where(cdlFiltered.eq(CODES.Almonds),    LBL.Almonds)
+    .where(cdlFiltered.eq(CODES.Pistachios), LBL.Pistachios)
+    .where(othersMask,                       LBL.Others)
+    .updateMask(cdlFiltered.gt(0))
+    .rename('class_label')
+    .clip(REGION);
+
+  classValues = [1,2,3,4,5,6];
+
+  classPoints = [
+    NSAMP.Grapes,
+    NSAMP.Rice,
+    NSAMP.Alfalfa,
+    NSAMP.Almonds,
+    NSAMP.Pistachios,
+    NSAMP.Others
+  ];
+
+  maxPoints = Math.max(
+    NSAMP.Grapes,
+    NSAMP.Rice,
+    NSAMP.Alfalfa,
+    NSAMP.Almonds,
+    NSAMP.Pistachios,
+    NSAMP.Others
+  );
+
+} else {
+
+  var validMask2 =
+    cdlFiltered.eq(CODES.Grapes)
+      .or(cdlFiltered.eq(CODES.Almonds))
+      .or(cdlFiltered.eq(CODES.Pistachios))
+      .or(othersMask);
+
+  cdlForSampling = ee.Image(0)
+    .where(cdlFiltered.eq(CODES.Grapes),     LBL.Grapes)
+    .where(cdlFiltered.eq(CODES.Almonds),    LBL.Almonds)
+    .where(cdlFiltered.eq(CODES.Pistachios), LBL.Pistachios)
+    .where(othersMask,                       LBL.Others)
+    .updateMask(validMask2)
+    .rename('class_label')
+    .clip(REGION);
+
+  classValues = [1,4,5,6];
+
+  classPoints = [
+    NSAMP.Grapes,
+    NSAMP.Almonds,
+    NSAMP.Pistachios,
+    NSAMP.Others
+  ];
+
+  maxPoints = Math.max(
+    NSAMP.Grapes,
+    NSAMP.Almonds,
+    NSAMP.Pistachios,
+    NSAMP.Others
+  );
+}
+
+var allSamples = cdlForSampling.stratifiedSample({
+  numPoints:   maxPoints,
+  classBand:   'class_label',
+  region:      REGION,
+  scale:       30,
+  seed:        42,
+  tileScale:   4,
+  geometries:  true,
+  classValues: classValues,
+  classPoints: classPoints
+});
+
+var classDict = ee.Dictionary({
+  '1':'Grapes',
+  '2':'Rice',
+  '3':'Alfalfa',
+  '4':'Almonds',
+  '5':'Pistachios',
+  '6':'Others'
+});

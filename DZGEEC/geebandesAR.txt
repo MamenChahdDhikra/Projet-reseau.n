@@ -1,0 +1,140 @@
+var zone1 = ee.Geometry.Rectangle([-90.80, 35.45, -90.20, 35.85]);
+var zone2 = ee.Geometry.Rectangle([-92.10, 33.95, -91.50, 34.35]);
+
+Map.addLayer(zone1, {color: 'blue'}, 'Zone 1');
+Map.addLayer(zone2, {color: 'red'},  'Zone 2');
+Map.centerObject(ee.Geometry.BBox(-93, 33, -89.5, 36.5), 7);
+
+function maskClouds(image) {
+  var scl  = image.select('SCL');
+  var mask = scl.eq(4).or(scl.eq(5)).or(scl.eq(6)).or(scl.eq(11));
+  return image.updateMask(mask);
+}
+
+var bands = ['B2','B3','B4','B5','B6','B7','B8','B8A','B11','B12'];
+
+var worldcover   = ee.ImageCollection('ESA/WorldCover/v200').first();
+var croplandMask = worldcover.eq(40);
+
+var cdl = ee.ImageCollection('USDA/NASS/CDL')
+  .filter(ee.Filter.date('2021-01-01','2021-12-31'))
+  .first();
+
+var cropType   = cdl.select('cropland');
+var confidence = cdl.select('confidence');
+
+var cdlReclass = cropType
+  .where(
+    cropType.neq(1).and(cropType.neq(2))
+                   .and(cropType.neq(3))
+                   .and(cropType.neq(5)),
+    ee.Image.constant(99)
+  )
+  .updateMask(confidence.gte(95))
+  .updateMask(croplandMask)
+  .rename('class');
+
+var classValues = [1,2,3,5,99];
+var classPoints = [761,381,1212,2339,307];
+
+function stratifiedPoints(geometry, zoneId) {
+  var pts = cdlReclass.clip(geometry).stratifiedSample({
+    numPoints  : 1,
+    classBand  : 'class',
+    region     : geometry,
+    scale      : 30,
+    classValues: classValues,
+    classPoints: classPoints,
+    seed       : 42,
+    geometries : true,
+    tileScale  : 16
+  });
+
+  return pts.map(function(f) {
+    var code = ee.Number(f.get('class'));
+    var name = ee.Algorithms.If(code.eq(1),'Corn',
+               ee.Algorithms.If(code.eq(2),'Cotton',
+               ee.Algorithms.If(code.eq(3),'Rice',
+               ee.Algorithms.If(code.eq(5),'Soybeans',
+               'Others'))));
+    return f.set('class_name', name, 'zone', zoneId);
+  });
+}
+
+var points_z1 = stratifiedPoints(zone1, 1);
+var points_z2 = stratifiedPoints(zone2, 2);
+
+print('=== ZONE 1 (attendu 5000) ===');
+print('Total        :', points_z1.size());
+print('Corn   ( 761):', points_z1.filter(ee.Filter.eq('class',1)).size());
+print('Cotton ( 381):', points_z1.filter(ee.Filter.eq('class',2)).size());
+print('Rice   (1212):', points_z1.filter(ee.Filter.eq('class',3)).size());
+print('Soy    (2339):', points_z1.filter(ee.Filter.eq('class',5)).size());
+print('Others ( 307):', points_z1.filter(ee.Filter.eq('class',99)).size());
+
+print('=== ZONE 2 (attendu 5000) ===');
+print('Total        :', points_z2.size());
+print('Corn   ( 761):', points_z2.filter(ee.Filter.eq('class',1)).size());
+print('Cotton ( 381):', points_z2.filter(ee.Filter.eq('class',2)).size());
+print('Rice   (1212):', points_z2.filter(ee.Filter.eq('class',3)).size());
+print('Soy    (2339):', points_z2.filter(ee.Filter.eq('class',5)).size());
+print('Others ( 307):', points_z2.filter(ee.Filter.eq('class',99)).size());
+
+print('=== TOTAL (attendu 10000) ===');
+print('Total :', points_z1.size().add(points_z2.size()));
+
+var startOfYear = ee.Date('2021-01-01');
+
+for (var i = 0; i < 36; i++) {
+
+  var startDate = startOfYear.advance(i * 10, 'day');
+  var endDate   = startOfYear.advance((i + 1) * 10, 'day');
+  var idx       = (i < 10) ? ('0' + i) : ('' + i);
+
+  var s2 = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+    .filterDate(startDate, endDate)
+    .map(maskClouds)
+    .select(bands);
+
+  var composite = ee.Algorithms.If(
+    s2.size().gt(0),
+    s2.median(),
+    ee.Image.constant(0).rename(bands)
+  );
+
+  composite = ee.Image(composite);
+
+  var renamed = composite.rename(
+    bands.map(function(b){ return b + '_t' + idx; })
+  );
+
+  var feat_z1 = renamed.sampleRegions({
+    collection: points_z1,
+    scale     : 20,
+    tileScale : 16,
+    geometries: true
+  });
+
+  var feat_z2 = renamed.sampleRegions({
+    collection: points_z2,
+    scale     : 20,
+    tileScale : 16,
+    geometries: true
+  });
+
+  Export.table.toDrive({
+    collection    : feat_z1,
+    description   : 'Z1_t' + idx,
+    folder        : 'MCTNet_Arkansas',
+    fileNamePrefix: 'Arkansas_Zone1_t' + idx,
+    fileFormat    : 'CSV'
+  });
+
+  Export.table.toDrive({
+    collection    : feat_z2,
+    description   : 'Z2_t' + idx,
+    folder        : 'MCTNet_Arkansas',
+    fileNamePrefix: 'Arkansas_Zone2_t' + idx,
+    fileFormat    : 'CSV'
+  });
+}

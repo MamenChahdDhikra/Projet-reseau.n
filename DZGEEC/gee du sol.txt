@@ -1,0 +1,172 @@
+var ZONE_NAME  = 'CA_Zone2';
+var ASSET_NAME = 'CA_Zone2_T01_DOY10';
+
+var DRIVE_FOLDER = 'Sentinel2_California_MCTNet';
+
+var pixels = ee.FeatureCollection(
+  'projects/teak-span-491210-v5/assets/' + ASSET_NAME         
+);
+
+print('Pixels chargés :', pixels.size());
+
+var soil_ph = ee.Image('projects/soilgrids-isric/phh2o_mean')
+  .select('phh2o_0-5cm_mean')
+  .divide(10)
+  .rename('soil_ph');
+
+var soil_clay = ee.Image('projects/soilgrids-isric/clay_mean')
+  .select('clay_0-5cm_mean')
+  .divide(10)
+  .rename('soil_clay');
+
+var soil_organic = ee.Image('projects/soilgrids-isric/ocd_mean')
+  .select('ocd_0-5cm_mean')
+  .divide(10)
+  .rename('soil_organic');
+
+var soil = soil_ph.addBands(soil_clay).addBands(soil_organic);
+
+print('SoilGrids chargé ✅');
+
+var pixels_with_soil = soil.sampleRegions({
+  collection : pixels,
+  properties : ['pixel_id', 'class_name', 'label', 'zone', 'split'],
+  scale      : 250,
+  tileScale  : 4,
+  geometries : true
+});
+
+print('Résultat :', pixels_with_soil.size());
+print('Exemple  :', pixels_with_soil.first());
+
+var fn = ZONE_NAME + '_SOL3_corrected';
+
+Export.table.toDrive({
+  collection    : pixels_with_soil,
+  description   : fn,
+  folder        : DRIVE_FOLDER,
+  fileNamePrefix: fn,
+  fileFormat    : 'CSV',
+  selectors     : [
+    'pixel_id', 'label', 'class_name',
+    'zone', 'split',
+    'soil_ph', 'soil_clay', 'soil_organic',
+    '.geo'
+  ]
+});
+
+print('✅ Tâche créée !');
+print('Fichier : ' + fn + '.csv');
+
+var ZONE_COORDS = {
+  'CA_Zone1': ee.Geometry.Rectangle([-122.0, 38.5, -121.0, 39.8]),
+  'CA_Zone2': ee.Geometry.Rectangle([-121.5, 35.8, -119.0, 38.4])
+};
+
+Map.centerObject(ZONE_COORDS[ZONE_NAME], 9);
+
+Map.addLayer(soil_ph,
+  {min:4, max:9, palette:['red','yellow','green','blue']},
+  'pH du sol', true);
+
+Map.addLayer(soil_clay,
+  {min:0, max:60, palette:['white','orange','brown']},
+  'Argile (%)', false);
+
+Map.addLayer(soil_organic,
+  {min:0, max:15, palette:['white','yellow','darkgreen']},
+  'Carbone organique', false);
+
+Map.addLayer(pixels, {color:'FF0000'}, 'Vos pixels', true);
+___________________________________________________________________________________________________________________________________________
+var ZONE_NAME  = 'AR_Zone2';
+
+var ASSET_NAME = 'Arkansas_Zone2_t00';
+
+var DRIVE_FOLDER = 'Sentinel2_Arkansas_MCTNet';
+
+var pixels = ee.FeatureCollection(
+  'projects/teak-span-491210-v5/assets/' + ASSET_NAME
+);
+
+print('Pixels chargés :', pixels.size());
+
+pixels = pixels.map(function(f) {
+  var lon = f.geometry().coordinates().get(0);
+  var lat = f.geometry().coordinates().get(1);
+  return f.set(
+    'lon',      lon,
+    'lat',      lat,
+    'pixel_id', f.get('system:index')
+  );
+});
+
+print('Exemple pixel :', pixels.first());
+
+var soil_ph = ee.Image(
+  'OpenLandMap/SOL/SOL_PH-H2O_USDA-4C1A2A_M/v02'
+).select('b0').divide(10).rename('soil_ph');
+
+var soil_clay = ee.Image(
+  'OpenLandMap/SOL/SOL_CLAY-WFRACTION_USDA-3A1A1A_M/v02'
+).select('b0').rename('soil_clay');
+
+var soil_organic = ee.Image(
+  'OpenLandMap/SOL/SOL_ORGANIC-CARBON_USDA-6A1C_M/v02'
+).select('b0').rename('soil_organic');
+
+var soil = soil_ph
+  .addBands(soil_clay)
+  .addBands(soil_organic);
+
+var pixels_with_soil = soil.sampleRegions({
+  collection : pixels,
+  properties : ['pixel_id', 'class_name',
+                'zone', 'lon', 'lat'],
+  scale      : 5000,
+  tileScale  : 4,
+  geometries : true
+});
+
+print('Résultat :', pixels_with_soil.size());
+print('Exemple  :', pixels_with_soil.first());
+
+var fn = ZONE_NAME + '_SOL3';
+
+Export.table.toDrive({
+  collection    : pixels_with_soil,
+  description   : fn,
+  folder        : DRIVE_FOLDER,
+  fileNamePrefix: fn,
+  fileFormat    : 'CSV',
+  selectors     : [
+    'pixel_id', 'class_name', 'zone',
+    'lon', 'lat',
+    'soil_ph', 'soil_clay', 'soil_organic',
+    '.geo'
+  ]
+});
+
+print('✅ Tâche créée !');
+print('Fichier : ' + fn + '.csv');
+
+Map.centerObject(pixels, 9);
+
+Map.addLayer(soil_ph,
+  {min:4, max:9,
+   palette:['red','yellow','green','blue']},
+  'pH du sol', true);
+
+Map.addLayer(soil_clay,
+  {min:0, max:60,
+   palette:['white','orange','brown']},
+  'Argile (%)', false);
+
+Map.addLayer(soil_organic,
+  {min:0, max:120,
+   palette:['white','yellow','green','darkgreen']},
+  'Carbone organique', false);
+
+Map.addLayer(pixels,
+  {color:'FF0000'},
+  'Vos pixels', true);
